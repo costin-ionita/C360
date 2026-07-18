@@ -1,6 +1,7 @@
 """MCP server exposing structured market data (quotes, fundamentals, price history) via yfinance."""
 
 from mcp.server.fastmcp import FastMCP
+import pandas as pd
 import yfinance as yf
 
 mcp = FastMCP("structured-market-data")
@@ -108,6 +109,36 @@ def get_price_history(ticker: str, period: str = "3mo", interval: str = "1d") ->
         "interval": interval,
         "bars": bars,
     }
+
+
+@mcp.tool()
+def get_earnings_surprise(ticker: str, limit: int = 4) -> dict:
+    """Get recent quarterly EPS: analyst consensus estimate vs. actual reported, with surprise %.
+
+    Args:
+        ticker: Stock ticker symbol, e.g. "AAPL", "MSFT".
+        limit: Max number of most recently reported quarters to return.
+    """
+    t = yf.Ticker(ticker)
+    # yfinance's own `limit` counts future/unreported dates too, so over-fetch and filter.
+    df = t.get_earnings_dates(limit=limit + 8)
+
+    if df is None or df.empty:
+        return {"error": f"No earnings history found for ticker '{ticker}'"}
+
+    reported = df.dropna(subset=["Reported EPS"]).sort_index(ascending=False).head(limit)
+
+    quarters = [
+        {
+            "earningsDate": idx.strftime("%Y-%m-%d"),
+            "epsEstimate": round(row["EPS Estimate"], 2) if pd.notna(row["EPS Estimate"]) else None,
+            "epsActual": round(row["Reported EPS"], 2),
+            "surprisePct": round(row["Surprise(%)"], 2) if pd.notna(row["Surprise(%)"]) else None,
+        }
+        for idx, row in reported.iterrows()
+    ]
+
+    return {"ticker": ticker.upper(), "quarters": quarters}
 
 
 if __name__ == "__main__":
