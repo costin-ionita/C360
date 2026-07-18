@@ -12,7 +12,8 @@ structured_server/     MCP server: quotes, fundamentals, price history, earnings
                         surprise (via yfinance)
 unstructured_server/    MCP server: SEC EDGAR filings search + full text (free,
                         no API key)
-skills/SKILL.md         Report structure and table/chart formatting conventions,
+skills/financial-report-formatting/SKILL.md
+                        Report structure and table/chart formatting conventions,
                         loaded into the orchestrator's system prompt
 orchestrator.py         Connects to both MCP servers, lets Claude plan + execute
                         tool calls (in parallel where possible), and forces a
@@ -52,7 +53,7 @@ The dashboard is rendered by a fixed Python/Jinja2 template (using Tailwind), no
 LLM-authored HTML — cheaper and more visually consistent than asking an LLM to
 hand-write markup on every run. To get reliable structured output from Claude,
 `submit_report` is a "virtual" tool (no MCP server behind it) whose input schema
-mirrors `skills/SKILL.md`'s report structure; the API validates the shape, so the
+mirrors `skills/financial-report-formatting/SKILL.md`'s report structure; the API validates the shape, so the
 final report never needs fragile text parsing.
 
 ## Setup

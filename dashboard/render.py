@@ -1,5 +1,6 @@
 """Renders a submit_report payload (see orchestrator.SUBMIT_REPORT_TOOL) into a
-self-contained Tailwind-styled HTML dashboard, following skills/SKILL.md's content
+self-contained Tailwind-styled HTML dashboard, following
+skills/financial-report-formatting/SKILL.md's content
 conventions and the dataviz skill's chart/color rules.
 
 Chart colors reuse the validated reference palette verbatim (dataviz skill,
@@ -24,7 +25,7 @@ CRITICAL = {"light": "#d03b3b", "dark": "#e66767"}
 
 
 # ---------------------------------------------------------------------------
-# Formatting helpers -- implement skills/SKILL.md's table conventions.
+# Formatting helpers -- implement skills/financial-report-formatting/SKILL.md's table conventions.
 # ---------------------------------------------------------------------------
 
 def fmt_currency(value, abbreviate=False):

@@ -1,6 +1,6 @@
 """Orchestrator-workers agent: connects to both MCP servers, lets Claude plan and execute
 tool calls to answer a natural-language query, and synthesizes a structured report
-following skills/SKILL.md conventions."""
+following skills/financial-report-formatting/SKILL.md conventions."""
 
 import asyncio
 import json
@@ -30,7 +30,7 @@ MODEL = "claude-sonnet-5"
 MAX_TOOL_ITERATIONS = 8
 
 # A "virtual" tool with no server behind it -- its only purpose is to force Claude's
-# final answer into the structured shape skills/SKILL.md describes, instead of free text.
+# final answer into the structured shape skills/financial-report-formatting/SKILL.md describes, instead of free text.
 SUBMIT_REPORT_TOOL = {
     "name": "submit_report",
     "description": (
@@ -143,7 +143,7 @@ SUBMIT_REPORT_TOOL = {
 
 
 def _load_skill() -> str:
-    return (ROOT / "skills" / "SKILL.md").read_text(encoding="utf-8")
+    return (ROOT / "skills" / "financial-report-formatting" / "SKILL.md").read_text(encoding="utf-8")
 
 
 def _mcp_tool_to_anthropic(tool) -> dict:
