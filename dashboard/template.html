@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ header.company or header.ticker or "Report" }} — Research Summary</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page-plane:     #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --axis-baseline:  #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --good:           {{ good.light }};
+    --critical:       {{ critical.light }};
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page-plane:     #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --axis-baseline:  #383835;
+      --border:         rgba(255,255,255,0.10);
+      --good:           {{ good.dark }};
+      --critical:       {{ critical.dark }};
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page-plane:     #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --axis-baseline:  #383835;
+    --border:         rgba(255,255,255,0.10);
+    --good:           {{ good.dark }};
+    --critical:       {{ critical.dark }};
+  }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .tabular { font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body class="min-h-screen" style="background: var(--page-plane); color: var(--text-primary);">
+  <div class="max-w-4xl mx-auto px-6 py-10 space-y-8">
+
+    <!-- Header -->
+    <header class="space-y-1">
+      <div class="flex items-baseline gap-3">
+        <h1 class="text-2xl font-semibold">{{ header.company or "Unknown Company" }}</h1>
+        <span class="text-sm font-medium px-2 py-0.5 rounded"
+              style="background: var(--surface-1); border: 1px solid var(--border); color: var(--text-secondary);">
+          {{ header.ticker or "N/A" }}
+        </span>
+        {% if header.exchange %}
+        <span class="text-sm" style="color: var(--text-muted);">{{ header.exchange }}</span>
+        {% endif %}
+      </div>
+      <p class="text-sm" style="color: var(--text-muted);">As of {{ header.as_of or "N/A" }}</p>
+    </header>
+
+    <!-- Executive summary -->
+    <section>
+      <p class="text-base leading-relaxed" style="color: var(--text-secondary);">{{ executive_summary }}</p>
+    </section>
+
+    <!-- KPI row -->
+    <section class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      {% for kpi in kpis %}
+      <div class="rounded-lg p-4" style="background: var(--surface-1); border: 1px solid var(--border);">
+        <div class="text-xs" style="color: var(--text-muted);">{{ kpi.label }}</div>
+        <div class="text-xl font-semibold mt-1">{{ kpi.value }}</div>
+        {% if kpi.delta %}
+        <div class="text-xs mt-1 tabular" style="color: {{ 'var(--good)' if kpi.is_up else 'var(--critical)' }};">
+          {{ kpi.delta }}
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </section>
+
+    <!-- Price history chart -->
+    <section class="rounded-lg p-5" style="background: var(--surface-1); border: 1px solid var(--border);">
+      <h2 class="text-sm font-semibold mb-3" style="color: var(--text-secondary);">Price History</h2>
+      {{ chart_html | safe }}
+    </section>
+
+    <!-- Fundamentals -->
+    <section class="rounded-lg p-5" style="background: var(--surface-1); border: 1px solid var(--border);">
+      <h2 class="text-sm font-semibold mb-3" style="color: var(--text-secondary);">Fundamentals</h2>
+      {% if fundamentals_rows %}
+      <table class="w-full text-sm">
+        <tbody>
+          {% for row in fundamentals_rows %}
+          <tr style="border-top: 1px solid var(--border);">
+            <td class="py-1.5" style="color: var(--text-muted);">{{ row.label }}</td>
+            <td class="py-1.5 text-right tabular font-medium">{{ row.value }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="text-sm" style="color: var(--text-muted);">No data available.</p>
+      {% endif %}
+    </section>
+
+    <!-- Earnings vs consensus -->
+    <section class="rounded-lg p-5" style="background: var(--surface-1); border: 1px solid var(--border);">
+      <h2 class="text-sm font-semibold mb-3" style="color: var(--text-secondary);">Earnings vs. Consensus</h2>
+      {% if earnings_rows %}
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left" style="color: var(--text-muted);">
+            <th class="font-medium pb-2">Quarter End</th>
+            <th class="font-medium pb-2 text-right">EPS Estimate</th>
+            <th class="font-medium pb-2 text-right">EPS Actual</th>
+            <th class="font-medium pb-2 text-right">Surprise</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in earnings_rows %}
+          <tr style="border-top: 1px solid var(--border);">
+            <td class="py-1.5 tabular">{{ row.date }}</td>
+            <td class="py-1.5 text-right tabular">{{ row.estimate }}</td>
+            <td class="py-1.5 text-right tabular font-medium">{{ row.actual }}</td>
+            <td class="py-1.5 text-right tabular font-medium"
+                style="color: {{ 'var(--good)' if row.is_up else 'var(--critical)' }};">{{ row.surprise }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="text-sm" style="color: var(--text-muted);">No data available.</p>
+      {% endif %}
+    </section>
+
+    <!-- Recent filings -->
+    <section class="rounded-lg p-5" style="background: var(--surface-1); border: 1px solid var(--border);">
+      <h2 class="text-sm font-semibold mb-3" style="color: var(--text-secondary);">Recent Filings</h2>
+      {% if filings_rows %}
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left" style="color: var(--text-muted);">
+            <th class="font-medium pb-2">Form</th>
+            <th class="font-medium pb-2">Filed</th>
+            <th class="font-medium pb-2 text-right">Link</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in filings_rows %}
+          <tr style="border-top: 1px solid var(--border);">
+            <td class="py-1.5">{{ row.form }}</td>
+            <td class="py-1.5 tabular">{{ row.date }}</td>
+            <td class="py-1.5 text-right">
+              {% if row.url %}<a href="{{ row.url }}" target="_blank" rel="noopener"
+                 class="underline" style="color: var(--text-secondary);">View</a>{% else %}—{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="text-sm" style="color: var(--text-muted);">No data available.</p>
+      {% endif %}
+    </section>
+
+    <!-- Filing excerpts -->
+    <section class="rounded-lg p-5" style="background: var(--surface-1); border: 1px solid var(--border);">
+      <h2 class="text-sm font-semibold mb-3" style="color: var(--text-secondary);">Notable Filing Excerpts</h2>
+      {% if filing_excerpts %}
+      <div class="space-y-4">
+        {% for excerpt in filing_excerpts %}
+        <blockquote class="text-sm leading-relaxed pl-3" style="border-left: 2px solid var(--gridline); color: var(--text-secondary);">
+          {{ excerpt.quote }}
+          {% if excerpt.source_url %}
+          <div class="mt-1">
+            <a href="{{ excerpt.source_url }}" target="_blank" rel="noopener"
+               class="text-xs underline" style="color: var(--text-muted);">Source</a>
+          </div>
+          {% endif %}
+        </blockquote>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="text-sm" style="color: var(--text-muted);">No data available.</p>
+      {% endif %}
+    </section>
+
+    <!-- Sources / audit footer -->
+    <footer class="pt-4" style="border-top: 1px solid var(--border);">
+      <h2 class="text-xs font-semibold mb-2 uppercase tracking-wide" style="color: var(--text-muted);">Sources</h2>
+      {% if sources_rows %}
+      <table class="w-full text-xs">
+        <tbody>
+          {% for row in sources_rows %}
+          <tr>
+            <td class="py-0.5 pr-3 font-medium" style="color: var(--text-secondary);">{{ row.tool }}</td>
+            <td class="py-0.5 tabular" style="color: var(--text-muted);">{{ row.args }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="text-xs" style="color: var(--text-muted);">No tool calls recorded.</p>
+      {% endif %}
+    </footer>
+
+  </div>
+</body>
+</html>

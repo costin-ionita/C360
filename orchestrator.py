@@ -14,6 +14,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from audit_log.logger import log_tool_call
+from dashboard.render import render_report
 
 load_dotenv()
 
@@ -251,7 +252,14 @@ async def main():
     finally:
         await orch.close()
 
-    print(json.dumps(report, indent=2))
+    if "error" in report:
+        print(json.dumps(report, indent=2))
+        sys.exit(1)
+
+    ticker = (report.get("header") or {}).get("ticker", "report").lower()
+    output_path = ROOT / "output" / f"report_{ticker}.html"
+    render_report(report, output_path)
+    print(f"Report written to {output_path}")
 
 
 if __name__ == "__main__":

@@ -6,3 +6,4 @@ beautifulsoup4
 anthropic
 python-dotenv
 lxml
+jinja2
