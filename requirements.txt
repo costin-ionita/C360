@@ -1,3 +1,5 @@
 mcp
 yfinance
 pandas
+requests
+beautifulsoup4
