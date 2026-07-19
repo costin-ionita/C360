@@ -1,0 +1,14 @@
+{% if rows %}
+<table class="w-full text-xs">
+  <tbody>
+    {% for row in rows %}
+    <tr>
+      <td class="py-0.5 pr-3 font-medium" style="color: var(--text-secondary);">{{ row.tool }}</td>
+      <td class="py-0.5 tabular" style="color: var(--text-muted);">{{ row.args }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="text-xs" style="color: var(--text-muted);">No tool calls recorded.</p>
+{% endif %}

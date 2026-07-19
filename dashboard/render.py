@@ -1,7 +1,8 @@
-"""Renders a submit_report payload (see orchestrator.SUBMIT_REPORT_TOOL) into a
-self-contained Tailwind-styled HTML dashboard, following
-skills/financial-report-formatting/SKILL.md's content
-conventions and the dataviz skill's chart/color rules.
+"""Per-section HTML rendering: turns a report_state.Section into an HTML *fragment*
+-- just the section's content, no title heading or card chrome. Title/chrome is owned
+by the caller (dashboard/template.html's loop for the CLI static export, or the React
+shell in the web app) so the same fragment serves both without duplicating layout
+markup.
 
 Chart colors reuse the validated reference palette verbatim (dataviz skill,
 references/palette.md) -- slot 1 blue for the single-series price line, and the
@@ -16,7 +17,18 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from report_state import SECTION_TITLES, Section
+
 ROOT = Path(__file__).parent
+
+_section_env = Environment(
+    loader=FileSystemLoader(str(ROOT / "sections")),
+    autoescape=select_autoescape(["html"]),
+)
+_page_env = Environment(
+    loader=FileSystemLoader(str(ROOT)),
+    autoescape=select_autoescape(["html"]),
+)
 
 # -- validated palette (dataviz skill references/palette.md), reused as-is --
 SERIES_BLUE = {"light": "#2a78d6", "dark": "#3987e5"}
@@ -257,7 +269,7 @@ def render_line_chart(price_history: list[dict]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Report assembly
+# Per-section renderers -- each takes a Section and returns a content fragment.
 # ---------------------------------------------------------------------------
 
 FUNDAMENTALS_FIELDS = [
@@ -286,16 +298,47 @@ def _delta_info(price, previous_close):
     }
 
 
-def build_context(report: dict) -> dict:
-    price_snapshot = report.get("price_snapshot") or {}
-    fundamentals = report.get("fundamentals") or {}
-    price_history = report.get("price_history") or []
+def _render_header(section: Section) -> str:
+    return _section_env.get_template("header.html").render(data=section.data)
 
-    fundamentals_rows = [
-        {"label": label, "value": fmt(fundamentals.get(key))} for key, label, fmt in FUNDAMENTALS_FIELDS
+
+def _render_executive_summary(section: Section) -> str:
+    return _section_env.get_template("executive_summary.html").render(data=section.data)
+
+
+def _render_price_snapshot(section: Section) -> str:
+    d = section.data
+    delta = _delta_info(d.get("price"), d.get("previous_close"))
+    kpis = [
+        {
+            "label": "Price",
+            "value": fmt_currency(d.get("price")),
+            "delta": delta["text"] if delta else None,
+            "is_up": delta["is_up"] if delta else None,
+        },
+        {
+            "label": "Day range",
+            "value": f"{fmt_currency(d.get('day_low'))} – {fmt_currency(d.get('day_high'))}"
+            if d.get("day_low") is not None
+            else "N/A",
+        },
+        {"label": "Volume", "value": fmt_number(d.get("volume"))},
+        {"label": "Market cap", "value": fmt_currency(d.get("market_cap"), abbreviate=True)},
     ]
+    return _section_env.get_template("price_snapshot.html").render(kpis=kpis)
 
-    earnings_rows = [
+
+def _render_price_history_chart(section: Section) -> str:
+    return render_line_chart(section.data.get("price_history") or [])
+
+
+def _render_fundamentals(section: Section) -> str:
+    rows = [{"label": label, "value": fmt(section.data.get(key))} for key, label, fmt in FUNDAMENTALS_FIELDS]
+    return _section_env.get_template("fundamentals.html").render(rows=rows)
+
+
+def _render_earnings_surprise(section: Section) -> str:
+    rows = [
         {
             "date": fmt_date(q.get("earnings_date")),
             "estimate": fmt_currency(q.get("eps_estimate")) if q.get("eps_estimate") is not None else "N/A",
@@ -303,61 +346,86 @@ def build_context(report: dict) -> dict:
             "surprise": fmt_pct(q.get("surprise_pct"), signed=True) if q.get("surprise_pct") is not None else "N/A",
             "is_up": (q.get("surprise_pct") or 0) >= 0,
         }
-        for q in (report.get("earnings_surprise") or [])
+        for q in (section.data.get("quarters") or [])
     ]
+    return _section_env.get_template("earnings_surprise.html").render(rows=rows)
 
-    filings_rows = [
+
+def _render_recent_filings(section: Section) -> str:
+    rows = [
         {"form": f.get("form", "N/A"), "date": fmt_date(f.get("filed_date")), "url": f.get("url")}
-        for f in (report.get("recent_filings") or [])
+        for f in (section.data.get("filings") or [])
     ]
+    return _section_env.get_template("recent_filings.html").render(rows=rows)
 
-    sources_rows = [
-        {"tool": s.get("tool", ""), "args": ", ".join(f"{k}={v}" for k, v in (s.get("args") or {}).items())}
-        for s in (report.get("sources") or [])
+
+def _render_filing_excerpts(section: Section) -> str:
+    return _section_env.get_template("filing_excerpts.html").render(excerpts=section.data.get("excerpts") or [])
+
+
+def _render_sources(section: Section) -> str:
+    rows = [
+        {"tool": e.get("tool", ""), "args": ", ".join(f"{k}={v}" for k, v in (e.get("args") or {}).items())}
+        for e in (section.data.get("entries") or [])
     ]
+    return _section_env.get_template("sources.html").render(rows=rows)
 
-    delta = _delta_info(price_snapshot.get("price"), price_snapshot.get("previous_close"))
 
-    kpis = [
+_RENDERERS = {
+    "header": _render_header,
+    "executive_summary": _render_executive_summary,
+    "price_snapshot": _render_price_snapshot,
+    "price_history_chart": _render_price_history_chart,
+    "fundamentals": _render_fundamentals,
+    "earnings_surprise": _render_earnings_surprise,
+    "recent_filings": _render_recent_filings,
+    "filing_excerpts": _render_filing_excerpts,
+    "sources": _render_sources,
+}
+
+
+def render_section(section: Section) -> str:
+    renderer = _RENDERERS.get(section.type)
+    if renderer is None:
+        return (
+            f'<p class="text-sm" style="color: var(--text-muted);">'
+            f"Unsupported section type: {html.escape(section.type)}</p>"
+        )
+    return renderer(section)
+
+
+def sections_to_payload(sections: list[Section]) -> list[dict]:
+    """API/JSON shape: [{id, type, title, html}, ...] -- what web/app.py returns."""
+    return [
         {
-            "label": "Price",
-            "value": fmt_currency(price_snapshot.get("price")),
-            "delta": delta["text"] if delta else None,
-            "is_up": delta["is_up"] if delta else None,
-        },
-        {
-            "label": "Day range",
-            "value": f"{fmt_currency(price_snapshot.get('day_low'))} – {fmt_currency(price_snapshot.get('day_high'))}"
-            if price_snapshot.get("day_low") is not None
-            else "N/A",
-        },
-        {"label": "Volume", "value": fmt_number(price_snapshot.get("volume"))},
-        {"label": "Market cap", "value": fmt_currency(price_snapshot.get("market_cap"), abbreviate=True)},
+            "id": s.id,
+            "type": s.type,
+            "title": s.title if s.title is not None else SECTION_TITLES.get(s.type, s.type),
+            "html": render_section(s),
+        }
+        for s in sections
     ]
 
-    return {
-        "header": report.get("header") or {},
-        "executive_summary": report.get("executive_summary") or "",
-        "kpis": kpis,
-        "chart_html": render_line_chart(price_history),
-        "fundamentals_rows": fundamentals_rows,
-        "earnings_rows": earnings_rows,
-        "filings_rows": filings_rows,
-        "filing_excerpts": report.get("filing_excerpts") or [],
-        "sources_rows": sources_rows,
-        "good": GOOD,
-        "critical": CRITICAL,
-        "series_blue": SERIES_BLUE,
-    }
 
+def render_static_page(sections: list[Section], output_path: Path) -> Path:
+    """CLI export: a self-contained HTML page (page shell + one card per section)."""
+    payload = sections_to_payload(sections)
+    header_section = next((s for s in sections if s.type == "header"), None)
+    page_title = "Report"
+    if header_section:
+        page_title = header_section.data.get("company") or header_section.data.get("ticker") or "Report"
 
-def render_report(report: dict, output_path: Path) -> Path:
-    env = Environment(
-        loader=FileSystemLoader(str(ROOT)),
-        autoescape=select_autoescape(["html"]),
+    header_payload = next((p for p in payload if p["type"] == "header"), None)
+    body_payload = [p for p in payload if p["type"] != "header"]
+
+    template = _page_env.get_template("template.html")
+    html_out = template.render(
+        page_title=page_title,
+        header=header_payload,
+        sections=body_payload,
+        good=GOOD,
+        critical=CRITICAL,
     )
-    template = env.get_template("template.html")
-    html_out = template.render(**build_context(report))
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,11 @@
+<div class="flex items-baseline gap-3 flex-wrap">
+  <h1 class="text-2xl font-semibold">{{ data.company or "Unknown Company" }}</h1>
+  <span class="text-sm font-medium px-2 py-0.5 rounded"
+        style="background: var(--surface-1); border: 1px solid var(--border); color: var(--text-secondary);">
+    {{ data.ticker or "N/A" }}
+  </span>
+  {% if data.exchange %}
+  <span class="text-sm" style="color: var(--text-muted);">{{ data.exchange }}</span>
+  {% endif %}
+</div>
+<p class="text-sm mt-1" style="color: var(--text-muted);">As of {{ data.as_of or "N/A" }}</p>

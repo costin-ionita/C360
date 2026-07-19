@@ -1,0 +1,25 @@
+{% if rows %}
+<table class="w-full text-sm">
+  <thead>
+    <tr class="text-left" style="color: var(--text-muted);">
+      <th class="font-medium pb-2">Form</th>
+      <th class="font-medium pb-2">Filed</th>
+      <th class="font-medium pb-2 text-right">Link</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr style="border-top: 1px solid var(--border);">
+      <td class="py-1.5">{{ row.form }}</td>
+      <td class="py-1.5 tabular">{{ row.date }}</td>
+      <td class="py-1.5 text-right">
+        {% if row.url %}<a href="{{ row.url }}" target="_blank" rel="noopener"
+           class="underline" style="color: var(--text-secondary);">View</a>{% else %}—{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="text-sm" style="color: var(--text-muted);">No data available.</p>
+{% endif %}

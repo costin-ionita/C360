@@ -1,0 +1,14 @@
+{% if rows %}
+<table class="w-full text-sm">
+  <tbody>
+    {% for row in rows %}
+    <tr style="border-top: 1px solid var(--border);">
+      <td class="py-1.5" style="color: var(--text-muted);">{{ row.label }}</td>
+      <td class="py-1.5 text-right tabular font-medium">{{ row.value }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="text-sm" style="color: var(--text-muted);">No data available.</p>
+{% endif %}

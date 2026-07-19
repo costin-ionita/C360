@@ -1,0 +1,9 @@
+/* Minimal reset -- palette/theme vars live in index.html, shared with the CLI's
+   static export via dashboard/template.html. */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}

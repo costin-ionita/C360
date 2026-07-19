@@ -1,0 +1,25 @@
+{% if rows %}
+<table class="w-full text-sm">
+  <thead>
+    <tr class="text-left" style="color: var(--text-muted);">
+      <th class="font-medium pb-2">Quarter End</th>
+      <th class="font-medium pb-2 text-right">EPS Estimate</th>
+      <th class="font-medium pb-2 text-right">EPS Actual</th>
+      <th class="font-medium pb-2 text-right">Surprise</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr style="border-top: 1px solid var(--border);">
+      <td class="py-1.5 tabular">{{ row.date }}</td>
+      <td class="py-1.5 text-right tabular">{{ row.estimate }}</td>
+      <td class="py-1.5 text-right tabular font-medium">{{ row.actual }}</td>
+      <td class="py-1.5 text-right tabular font-medium"
+          style="color: {{ 'var(--good)' if row.is_up else 'var(--critical)' }};">{{ row.surprise }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="text-sm" style="color: var(--text-muted);">No data available.</p>
+{% endif %}

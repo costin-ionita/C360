@@ -7,3 +7,5 @@ anthropic
 python-dotenv
 lxml
 jinja2
+fastapi
+uvicorn

@@ -1,0 +1,17 @@
+{% if excerpts %}
+<div class="space-y-4">
+  {% for excerpt in excerpts %}
+  <blockquote class="text-sm leading-relaxed pl-3" style="border-left: 2px solid var(--gridline); color: var(--text-secondary);">
+    {{ excerpt.quote }}
+    {% if excerpt.source_url %}
+    <div class="mt-1">
+      <a href="{{ excerpt.source_url }}" target="_blank" rel="noopener"
+         class="text-xs underline" style="color: var(--text-muted);">Source</a>
+    </div>
+    {% endif %}
+  </blockquote>
+  {% endfor %}
+</div>
+{% else %}
+<p class="text-sm" style="color: var(--text-muted);">No data available.</p>
+{% endif %}

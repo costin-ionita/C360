@@ -1,10 +1,13 @@
-"""Orchestrator-workers agent: connects to both MCP servers, lets Claude plan and execute
-tool calls to answer a natural-language query, and synthesizes a structured report
-following skills/financial-report-formatting/SKILL.md conventions."""
+"""Orchestrator: connects to both MCP servers, lets Claude plan and execute tool
+calls, and builds up a report as an ordered list of sections (report_state.Section)
+via a family of add_*_section tools -- the same tool loop and tool family serve both
+"generate a fresh report" (starting from an empty section list) and "edit an existing
+report" (starting from a populated one, see web/app.py's chat endpoint)."""
 
 import asyncio
 import json
 import sys
+import uuid
 from contextlib import AsyncExitStack
 from pathlib import Path
 
@@ -13,8 +16,9 @@ from dotenv import load_dotenv
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from audit_log.logger import log_tool_call
-from dashboard.render import render_report
+from audit_log.logger import get_session_entries, log_tool_call
+from dashboard.render import render_static_page
+from report_state import ReportState, Section, SECTION_TITLES
 
 load_dotenv()
 
@@ -29,42 +33,68 @@ MCP_SERVERS = {
 MODEL = "claude-sonnet-5"
 MAX_TOOL_ITERATIONS = 8
 
-# A "virtual" tool with no server behind it -- its only purpose is to force Claude's
-# final answer into the structured shape skills/financial-report-formatting/SKILL.md describes, instead of free text.
-SUBMIT_REPORT_TOOL = {
-    "name": "submit_report",
+# ---------------------------------------------------------------------------
+# Section tools -- synthetic tools with no MCP server behind them. Each one
+# mutates report_state.ReportState directly (see Orchestrator._apply_section_tool).
+# Calling one of these a second time for the same standard type *replaces* that
+# section in place (same list position), which is what makes "regenerate fundamentals"
+# and "add fundamentals back after removing it" the same mechanism.
+# ---------------------------------------------------------------------------
+
+ADD_HEADER = {
+    "name": "add_header",
     "description": (
-        "Submit the final synthesized report. Call this exactly once, as your final "
-        "action, after you have gathered all data needed to answer the user's query."
+        "Add or replace the report header (company name, ticker, exchange, as-of "
+        "date). Call this once per report, typically first."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
-            "header": {
-                "type": "object",
-                "properties": {
-                    "company": {"type": "string"},
-                    "ticker": {"type": "string"},
-                    "exchange": {"type": "string"},
-                    "as_of": {"type": "string", "description": "Date/time the data was pulled"},
-                },
-                "required": ["company", "ticker", "as_of"],
-            },
-            "executive_summary": {
-                "type": "string",
-                "description": "2-4 sentences, plain language, leading with the most decision-relevant fact",
-            },
-            "price_snapshot": {
-                "type": "object",
-                "properties": {
-                    "price": {"type": "number"},
-                    "previous_close": {"type": "number"},
-                    "day_low": {"type": "number"},
-                    "day_high": {"type": "number"},
-                    "volume": {"type": "number"},
-                    "market_cap": {"type": "number"},
-                },
-            },
+            "company": {"type": "string"},
+            "ticker": {"type": "string"},
+            "exchange": {"type": "string"},
+            "as_of": {"type": "string", "description": "Date/time the data was pulled"},
+        },
+        "required": ["company", "ticker", "as_of"],
+    },
+}
+
+ADD_EXECUTIVE_SUMMARY = {
+    "name": "add_executive_summary",
+    "description": (
+        "Add or replace the executive summary (2-4 sentences, plain language, lead "
+        "with the most decision-relevant fact). Call this after gathering the data "
+        "it references, typically last."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {"text": {"type": "string"}},
+        "required": ["text"],
+    },
+}
+
+ADD_PRICE_SNAPSHOT_SECTION = {
+    "name": "add_price_snapshot_section",
+    "description": "Add or replace the price snapshot section.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "price": {"type": "number"},
+            "previous_close": {"type": "number"},
+            "day_low": {"type": "number"},
+            "day_high": {"type": "number"},
+            "volume": {"type": "number"},
+            "market_cap": {"type": "number"},
+        },
+    },
+}
+
+ADD_PRICE_HISTORY_CHART_SECTION = {
+    "name": "add_price_history_chart_section",
+    "description": "Add or replace the price history chart section.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
             "price_history": {
                 "type": "array",
                 "description": "Closing price series for charting",
@@ -76,22 +106,40 @@ SUBMIT_REPORT_TOOL = {
                     },
                     "required": ["date", "close"],
                 },
-            },
-            "fundamentals": {
-                "type": "object",
-                "properties": {
-                    "trailing_pe": {"type": ["number", "null"]},
-                    "forward_pe": {"type": ["number", "null"]},
-                    "price_to_book": {"type": ["number", "null"]},
-                    "trailing_eps": {"type": ["number", "null"]},
-                    "revenue_growth": {"type": ["number", "null"]},
-                    "profit_margins": {"type": ["number", "null"]},
-                    "return_on_equity": {"type": ["number", "null"]},
-                },
-            },
-            "earnings_surprise": {
+            }
+        },
+        "required": ["price_history"],
+    },
+}
+
+ADD_FUNDAMENTALS_SECTION = {
+    "name": "add_fundamentals_section",
+    "description": "Add or replace the fundamentals section (valuation, profitability, growth).",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "trailing_pe": {"type": ["number", "null"]},
+            "forward_pe": {"type": ["number", "null"]},
+            "price_to_book": {"type": ["number", "null"]},
+            "trailing_eps": {"type": ["number", "null"]},
+            "revenue_growth": {"type": ["number", "null"]},
+            "profit_margins": {"type": ["number", "null"]},
+            "return_on_equity": {"type": ["number", "null"]},
+        },
+    },
+}
+
+ADD_EARNINGS_SURPRISE_SECTION = {
+    "name": "add_earnings_surprise_section",
+    "description": (
+        "Add or replace the earnings-vs-consensus section: recent quarters' EPS "
+        "analyst estimate vs. actual reported, with surprise %."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "quarters": {
                 "type": "array",
-                "description": "Recent quarters: EPS consensus estimate vs. actual reported, with surprise %",
                 "items": {
                     "type": "object",
                     "properties": {
@@ -102,8 +150,19 @@ SUBMIT_REPORT_TOOL = {
                     },
                     "required": ["earnings_date", "eps_actual"],
                 },
-            },
-            "recent_filings": {
+            }
+        },
+        "required": ["quarters"],
+    },
+}
+
+ADD_RECENT_FILINGS_SECTION = {
+    "name": "add_recent_filings_section",
+    "description": "Add or replace the recent SEC filings section.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "filings": {
                 "type": "array",
                 "items": {
                     "type": "object",
@@ -113,8 +172,22 @@ SUBMIT_REPORT_TOOL = {
                         "url": {"type": "string"},
                     },
                 },
-            },
-            "filing_excerpts": {
+            }
+        },
+        "required": ["filings"],
+    },
+}
+
+ADD_FILING_EXCERPTS_SECTION = {
+    "name": "add_filing_excerpts_section",
+    "description": (
+        "Add or replace the notable filing excerpts section: short quoted passages "
+        "relevant to the query, each with a citation link back to its source filing."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "excerpts": {
                 "type": "array",
                 "items": {
                     "type": "object",
@@ -124,22 +197,27 @@ SUBMIT_REPORT_TOOL = {
                     },
                     "required": ["quote", "source_url"],
                 },
-            },
-            "sources": {
-                "type": "array",
-                "description": "Every tool call made while researching this report",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "tool": {"type": "string"},
-                        "args": {"type": "object"},
-                    },
-                },
-            },
+            }
         },
-        "required": ["header", "executive_summary", "sources"],
+        "required": ["excerpts"],
     },
 }
+
+STANDARD_SECTION_TOOLS = [
+    ADD_HEADER,
+    ADD_EXECUTIVE_SUMMARY,
+    ADD_PRICE_SNAPSHOT_SECTION,
+    ADD_PRICE_HISTORY_CHART_SECTION,
+    ADD_FUNDAMENTALS_SECTION,
+    ADD_EARNINGS_SURPRISE_SECTION,
+    ADD_RECENT_FILINGS_SECTION,
+    ADD_FILING_EXCERPTS_SECTION,
+]
+
+# tool name -> section type/id it writes to (id == type for all standard sections)
+SECTION_TOOL_TYPES = {tool["name"]: tool["name"].removeprefix("add_").removesuffix("_section") for tool in STANDARD_SECTION_TOOLS}
+SECTION_TOOL_TYPES["add_header"] = "header"
+SECTION_TOOL_TYPES["add_executive_summary"] = "executive_summary"
 
 
 def _load_skill() -> str:
@@ -156,9 +234,10 @@ def _mcp_tool_to_anthropic(tool) -> dict:
 
 class Orchestrator:
     def __init__(self):
-        self.sessions: dict[str, ClientSession] = {}
+        self.mcp_sessions: dict[str, ClientSession] = {}
         self.tool_routing: dict[str, str] = {}
         self.anthropic_tools: list[dict] = []
+        self.report_sessions: dict[str, ReportState] = {}
         self._stack = AsyncExitStack()
         self.client = anthropic.Anthropic()
 
@@ -168,7 +247,7 @@ class Orchestrator:
             read, write = await self._stack.enter_async_context(stdio_client(params))
             session = await self._stack.enter_async_context(ClientSession(read, write))
             await session.initialize()
-            self.sessions[server_name] = session
+            self.mcp_sessions[server_name] = session
 
             tools = await session.list_tools()
             for tool in tools.tools:
@@ -178,65 +257,125 @@ class Orchestrator:
     async def close(self):
         await self._stack.aclose()
 
-    async def _execute_tool(self, name: str, args: dict) -> str:
+    def get_or_create_session(self, session_id: str) -> ReportState:
+        return self.report_sessions.setdefault(session_id, ReportState())
+
+    async def _execute_tool(self, session_id: str, name: str, args: dict) -> str:
         server_name = self.tool_routing[name]
-        session = self.sessions[server_name]
-        result = await session.call_tool(name, args)
+        mcp_session = self.mcp_sessions[server_name]
+        result = await mcp_session.call_tool(name, args)
         text = "\n".join(c.text for c in result.content if hasattr(c, "text"))
 
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError:
             parsed = text
-        log_tool_call(server=server_name, tool=name, args=args, result=parsed)
+        log_tool_call(server=server_name, tool=name, args=args, result=parsed, session_id=session_id)
 
         return text
 
-    async def run(self, user_query: str) -> dict:
-        system = (
+    def _apply_section_tool(self, session_id: str, state: ReportState, name: str, args: dict) -> str:
+        section_type = SECTION_TOOL_TYPES.get(name)
+        if section_type is None:
+            result = f"Error: unknown section tool '{name}'"
+            log_tool_call(server="report", tool=name, args=args, result=result, session_id=session_id)
+            return result
+
+        section = Section(id=section_type, type=section_type, title=SECTION_TITLES.get(section_type), data=args)
+        idx = next((i for i, s in enumerate(state.sections) if s.id == section.id), None)
+        if idx is not None:
+            state.sections[idx] = section
+        else:
+            state.sections.append(section)
+
+        result = f"Added/updated section '{section.id}'."
+        log_tool_call(server="report", tool=name, args=args, result=result, session_id=session_id)
+        return result
+
+    def _refresh_sources(self, session_id: str, state: ReportState) -> None:
+        """Rebuild the 'sources' section from the audit log -- never LLM-authored, so
+        every number in the report stays traceable to the call that produced it."""
+        entries = get_session_entries(session_id)
+        data_entries = [e for e in entries if e.get("server") != "report"]
+        sources_section = Section(
+            id="sources",
+            type="sources",
+            title=SECTION_TITLES["sources"],
+            data={"entries": [{"tool": e["tool"], "args": e["args"]} for e in data_entries]},
+        )
+        idx = next((i for i, s in enumerate(state.sections) if s.id == "sources"), None)
+        if idx is not None:
+            state.sections[idx] = sources_section
+        else:
+            state.sections.append(sources_section)
+
+    def _build_system_prompt(self, state: ReportState) -> str:
+        if state.sections:
+            section_list = "\n".join(f"- {s.id} ({s.type}): {s.title or s.id}" for s in state.sections)
+        else:
+            section_list = "(none yet -- this is a fresh report)"
+        return (
             "You are a financial research orchestrator. Given a user's natural-language "
-            "query, decide which tools to call (in parallel where possible) to gather the "
-            "data needed to answer it, then synthesize a final report by calling "
-            "submit_report exactly once, as your final action. Follow these formatting "
-            "conventions when building the report:\n\n" + _load_skill()
+            "query, decide which data tools to call (in parallel where possible) to "
+            "gather the data needed to answer it. Build the report by calling one "
+            "add_*_section tool per section -- these mutate the report directly, there "
+            "is no separate 'submit' step. When the report reflects everything relevant "
+            "to the query, reply with plain text and no further tool calls; that ends "
+            "the turn.\n\n"
+            f"Current report sections:\n{section_list}\n\n"
+            "Follow these formatting conventions when building the report:\n\n" + _load_skill()
         )
 
-        messages = [{"role": "user", "content": user_query}]
-        tools = self.anthropic_tools + [SUBMIT_REPORT_TOOL]
+    async def run_turn(self, session_id: str, user_message: str) -> tuple[str, ReportState]:
+        state = self.get_or_create_session(session_id)
+        state.messages.append({"role": "user", "content": user_message})
+
+        tools = self.anthropic_tools + STANDARD_SECTION_TOOLS
 
         for _ in range(MAX_TOOL_ITERATIONS):
             response = self.client.messages.create(
                 model=MODEL,
                 max_tokens=4096,
-                system=system,
+                system=self._build_system_prompt(state),
                 tools=tools,
-                messages=messages,
+                messages=state.messages,
             )
-            messages.append({"role": "assistant", "content": response.content})
+            state.messages.append({"role": "assistant", "content": response.content})
 
             tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
             if not tool_use_blocks:
-                return {
-                    "error": "Model finished without calling submit_report",
-                    "raw_text": "\n".join(b.text for b in response.content if b.type == "text"),
+                reply_text = "\n".join(b.text for b in response.content if b.type == "text")
+                self._refresh_sources(session_id, state)
+                return reply_text, state
+
+            # Data tools (MCP) run concurrently -- their order never mattered. Section
+            # tools mutate local state and run sequentially, preserving the order Claude
+            # emitted them in, so the section list doesn't depend on asyncio scheduling.
+            data_blocks = [b for b in tool_use_blocks if b.name in self.tool_routing]
+            section_blocks = [b for b in tool_use_blocks if b.name not in self.tool_routing]
+
+            data_results = await asyncio.gather(
+                *(self._execute_tool(session_id, b.name, b.input) for b in data_blocks)
+            )
+            section_results = [
+                self._apply_section_tool(session_id, state, b.name, b.input) for b in section_blocks
+            ]
+
+            results_by_id = dict(zip((b.id for b in data_blocks), data_results))
+            results_by_id.update(zip((b.id for b in section_blocks), section_results))
+
+            state.messages.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": b.id, "content": results_by_id[b.id]}
+                        for b in tool_use_blocks
+                    ],
                 }
-
-            submit_block = next((b for b in tool_use_blocks if b.name == "submit_report"), None)
-            if submit_block is not None:
-                return submit_block.input
-
-            worker_blocks = [b for b in tool_use_blocks if b.name != "submit_report"]
-            results = await asyncio.gather(
-                *(self._execute_tool(b.name, b.input) for b in worker_blocks)
             )
 
-            tool_result_content = [
-                {"type": "tool_result", "tool_use_id": block.id, "content": result}
-                for block, result in zip(worker_blocks, results)
-            ]
-            messages.append({"role": "user", "content": tool_result_content})
-
-        return {"error": f"Exceeded {MAX_TOOL_ITERATIONS} tool-call iterations without a final report"}
+        self._refresh_sources(session_id, state)
+        return f"Exceeded {MAX_TOOL_ITERATIONS} tool-call iterations without finishing.", state
 
 
 async def main():
@@ -248,18 +387,21 @@ async def main():
     orch = Orchestrator()
     await orch.connect()
     try:
-        report = await orch.run(query)
+        session_id = str(uuid.uuid4())
+        reply_text, state = await orch.run_turn(session_id, query)
     finally:
         await orch.close()
 
-    if "error" in report:
-        print(json.dumps(report, indent=2))
+    if not state.sections:
+        print(f"No report generated. Model's final reply: {reply_text}")
         sys.exit(1)
 
-    ticker = (report.get("header") or {}).get("ticker", "report").lower()
-    output_path = ROOT / "output" / f"report_{ticker}.html"
-    render_report(report, output_path)
+    header = next((s for s in state.sections if s.type == "header"), None)
+    ticker = (header.data.get("ticker") if header else None) or "report"
+    output_path = ROOT / "output" / f"report_{ticker.lower()}.html"
+    render_static_page(state.sections, output_path)
     print(f"Report written to {output_path}")
+    print(f"Model summary: {reply_text}")
 
 
 if __name__ == "__main__":
